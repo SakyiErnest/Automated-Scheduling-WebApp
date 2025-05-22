@@ -1,0 +1,30 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    function belongsToSchool(schoolId) {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+        get(/databases/$(database)/documents/schools/$(schoolId)).data.userId == request.auth.uid;
+    }
+    
+    // School logos
+    match /schools/{schoolId}/logo {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && belongsToSchool(schoolId);
+    }
+    
+    // Default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

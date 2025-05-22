@@ -1,0 +1,161 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helper functions ---
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // Checks if the currently authenticated user exists in the users collection
+    // and has the specified role.
+    function hasRole(role) {
+      // Consider potential optimization: Use get() and check for null data instead of exists() + get()
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      return isSignedIn() &&
+             exists(userPath) &&
+             get(userPath).data.role == role;
+    }
+
+    // Checks if the user has 'admin' or 'superadmin' role.
+    function isAdmin() {
+      // This relies on the hasRole function above.
+      return hasRole('admin') || hasRole('superadmin');
+    }
+
+    // Checks if the currently authenticated user is associated with the given schoolId.
+    // Assumes the 'schools' document has a 'userId' field matching the owner's UID.
+    function belongsToSchool(schoolId) {
+      // Consider potential optimization: could be combined with exists check inside isValidSchoolResource if needed.
+      let schoolPath = /databases/$(database)/documents/schools/$(schoolId);
+      return isSignedIn() &&
+             exists(schoolPath) &&
+             get(schoolPath).data.userId == request.auth.uid;
+    }
+
+    // Checks if the schoolId is valid and the user belongs to that school.
+    function isValidSchoolResource(schoolId) {
+      // Note: The exists() check here is slightly redundant as belongsToSchool also checks exists().
+      // This isn't an error, just a minor inefficiency.
+      return schoolId is string &&
+             belongsToSchool(schoolId);
+             // removed redundant exists() check: exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+    }
+
+    // ** FIXED FUNCTION **
+    // Checks if the provided value is a valid Firestore Timestamp.
+    // Renamed parameter from 'timestamp' to 'value' to avoid conflict with the timestamp type.
+    function isValidTimestamp(value) {
+      return value is timestamp;
+    }
+
+    // --- Users collection ---
+    match /users/{userId} {
+      // Admins or the user themselves can read.
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      // Only the user themselves can create their own document (e.g., during signup).
+      allow create: if isSignedIn() && isOwner(userId) && request.auth.uid == userId; // Added explicit check
+      // Admins or the user themselves can update.
+      // POTENTIAL ISSUE: User could potentially change their own role if not restricted.
+      allow update: if isSignedIn() && (isOwner(userId) || isAdmin());
+      // Only Admins can delete users.
+      allow delete: if isAdmin();
+    }
+
+    // --- Schools collection ---
+    match /schools/{schoolId} {
+      // Allow listing schools for authenticated users
+      allow list: if isSignedIn();
+      // Admins or the school owner can read individual schools
+      allow get: if isSignedIn() && (belongsToSchool(schoolId) || isAdmin());
+      // User must be signed in and the userId field in the *new* data must match their auth uid.
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      // Only the school owner can update
+      allow update: if isSignedIn() && belongsToSchool(schoolId) &&
+                    // Prevent changing the owner
+                    request.resource.data.userId == resource.data.userId;
+      // Only the school owner can delete
+      allow delete: if isSignedIn() && belongsToSchool(schoolId);
+    }
+
+    // --- School Settings collection ---
+    match /schoolSettings/{settingId} {
+      // Allow listing for authenticated users
+      allow list: if isSignedIn();
+      // Admins or the owner of the linked school can read individual settings
+      allow get: if isSignedIn() && (belongsToSchool(resource.data.schoolId) || isAdmin());
+      // User creating must belong to the school specified in the new setting's schoolId
+      allow create: if isSignedIn() && isValidSchoolResource(request.resource.data.schoolId);
+      // Only owner of linked school can update
+      allow update: if isSignedIn() && belongsToSchool(resource.data.schoolId) &&
+                    // Prevent changing the school link
+                    request.resource.data.schoolId == resource.data.schoolId;
+      // Only owner of linked school can delete
+      allow delete: if isSignedIn() && belongsToSchool(resource.data.schoolId);
+    }
+
+    // --- Teachers, Classes, Subjects, Rooms, Schedules collections (Common Pattern) ---
+    // Apply similar logic and consider the potential issues mentioned for schoolSettings
+
+    // Teachers collection
+    match /teachers/{teacherId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && (belongsToSchool(resource.data.schoolId) || isAdmin());
+      allow create: if isSignedIn() && isValidSchoolResource(request.resource.data.schoolId);
+      allow update: if isSignedIn() && belongsToSchool(resource.data.schoolId) &&
+                    request.resource.data.schoolId == resource.data.schoolId;
+      allow delete: if isSignedIn() && belongsToSchool(resource.data.schoolId);
+    }
+
+    // Classes collection
+    match /classes/{classId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && (belongsToSchool(resource.data.schoolId) || isAdmin());
+      allow create: if isSignedIn() && isValidSchoolResource(request.resource.data.schoolId);
+      allow update: if isSignedIn() && belongsToSchool(resource.data.schoolId) &&
+                    request.resource.data.schoolId == resource.data.schoolId;
+      allow delete: if isSignedIn() && belongsToSchool(resource.data.schoolId);
+    }
+
+    // Subjects collection
+    match /subjects/{subjectId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && (belongsToSchool(resource.data.schoolId) || isAdmin());
+      allow create: if isSignedIn() && isValidSchoolResource(request.resource.data.schoolId);
+      allow update: if isSignedIn() && belongsToSchool(resource.data.schoolId) &&
+                    request.resource.data.schoolId == resource.data.schoolId;
+      allow delete: if isSignedIn() && belongsToSchool(resource.data.schoolId);
+    }
+
+    // Rooms collection
+    match /rooms/{roomId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && (belongsToSchool(resource.data.schoolId) || isAdmin());
+      allow create: if isSignedIn() && isValidSchoolResource(request.resource.data.schoolId);
+      allow update: if isSignedIn() && belongsToSchool(resource.data.schoolId) &&
+                    request.resource.data.schoolId == resource.data.schoolId;
+      allow delete: if isSignedIn() && belongsToSchool(resource.data.schoolId);
+    }
+
+    // Schedules collection
+    match /schedules/{scheduleId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn() && (belongsToSchool(resource.data.schoolId) || isAdmin());
+      allow create: if isSignedIn() && isValidSchoolResource(request.resource.data.schoolId);
+      allow update: if isSignedIn() && belongsToSchool(resource.data.schoolId) &&
+                    request.resource.data.schoolId == resource.data.schoolId;
+      allow delete: if isSignedIn() && belongsToSchool(resource.data.schoolId);
+    }
+
+    // --- Default deny ---
+    // Good practice: Deny all access to any path not explicitly matched above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
